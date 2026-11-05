@@ -1,0 +1,10 @@
+{
+  "name": "Card FX",
+  "description": "Digital card game effects in three.js: foils and holographics, a 3D inspector, booster opening, hand fan and board animations.",
+  "type": "play",
+  "category": "tool",
+  "engine": "three.js",
+  "created": "2026-11-05",
+  "tags": ["3D", "shaders", "cards"],
+  "thumbnail": "thumb.png"
+}
