@@ -4,7 +4,10 @@ import { sfx } from '../core/audio';
 import type { Stage } from '../core/stage';
 import { RARITY_COLOR, type Rarity } from './data';
 import type { Fx } from '../fx/fx';
-import type { CardView } from './CardView';
+import { CardLayer, type CardLayerValue, CardView } from './CardView';
+import type { CardPile } from './CardPile';
+import type { CardDef } from './data';
+import { finishById } from './finishes';
 import { CARD_H, CARD_W } from './geometry';
 
 // Reusable card choreography. These are the verbs a game would call:
@@ -189,6 +192,196 @@ export async function dissolveOut(tl: Timeline, fx: Fx, card: CardView, style: E
   }
 }
 
+// ---- Actions for a card that is already in play ----
+// Each one starts from wherever the card is resting and puts it back exactly there, so a
+// game can fire them without tracking any state of its own.
+
+export interface AttackOptions {
+  /** Fired on the frame of contact: the moment to apply damage and play hit effects. */
+  onHit?: (at: THREE.Vector3, dir: THREE.Vector3) => void;
+  /** Layer to drop back to afterwards. */
+  restLayer?: CardLayerValue;
+}
+
+/**
+ * A strike in three beats: rear back, lunge, return. The pull-back is the important part.
+ * It tells the eye where the hit is going before it happens, which makes a very fast
+ * lunge readable.
+ */
+export async function attack(tl: Timeline, card: CardView, target: THREE.Vector3, o: AttackOptions = {}) {
+  tl.kill(card);
+  const home = card.position.clone();
+  const homeR = card.rotation.clone();
+  const dir = target.clone().sub(home).setZ(0);
+  const dist = dir.length() || 1;
+  dir.divideScalar(dist);
+  const s = card.scale.x;
+  // Stop with the leading edge on the target rather than the two centres overlapping.
+  const reach = Math.max(dist - CARD_H * s * 0.62, dist * 0.35);
+  const pose = (along: number, lift: number, lean: number) => {
+    card.position.set(home.x + dir.x * along, home.y + dir.y * along, home.z + lift);
+    // Positive lean raises the leading edge; negative digs it in.
+    card.rotation.set(homeR.x + dir.y * lean, homeR.y - dir.x * lean, homeR.z);
+  };
+  card.setLayer(CardLayer.air);
+  const flex = card.flex;
+  card.flex = 0.8;
+
+  sfx.whoosh(0.08);
+  await tl.to(0.24, (k) => pose(-0.5 * s * k, 0.75 * k, 0.4 * k), { ease: ease.outCubic, owner: card });
+  await tl.to(0.11, (k) => pose(lerp(-0.5 * s, reach, k), lerp(0.75, 0.3, k), lerp(0.4, -0.5, k)), { ease: ease.inCubic, owner: card });
+  o.onHit?.(tmpHit.set(home.x + dir.x * (reach + CARD_H * s * 0.4), home.y + dir.y * (reach + CARD_H * s * 0.4), home.z + 0.2), dir);
+  // Bounce off the contact, then glide home.
+  await tl.to(0.09, (k) => pose(reach - 0.3 * s * k, 0.3 + 0.25 * k, lerp(-0.5, 0.25, k)), { ease: ease.outQuad, owner: card });
+  await tl.to(0.36, (k) => pose(lerp(reach - 0.3 * s, 0, k), 0.55 * (1 - k), 0.25 * (1 - k)), { ease: ease.inOutCubic, owner: card });
+  card.position.copy(home);
+  card.rotation.copy(homeR);
+  card.flex = flex;
+  card.setLayer(o.restLayer ?? CardLayer.table);
+}
+
+/** Being struck: knocked away from the blow, flashing, then ringing back to rest like a spring. */
+export function hitReact(tl: Timeline, card: CardView, from: THREE.Vector3, strength = 1) {
+  tl.kill(card);
+  const home = card.position.clone();
+  const homeR = card.rotation.clone();
+  const dir = home.clone().sub(from).setZ(0).normalize();
+  const push = 0.42 * card.scale.x * strength;
+  return tl.to(0.5, (_k, raw) => {
+    // A decaying cosine: full displacement on the first frame, then smaller swings back and forth.
+    const w = Math.exp(-raw * 5) * Math.cos(raw * 17);
+    card.position.set(home.x + dir.x * push * w, home.y + dir.y * push * w, home.z + Math.abs(w) * 0.18);
+    card.rotation.set(homeR.x + dir.y * 0.34 * w * strength, homeR.y - dir.x * 0.34 * w * strength, homeR.z + Math.sin(raw * 31) * 0.05 * (1 - raw) * strength);
+    card.u.uFlash.value = Math.pow(1 - raw, 3) * 0.55 * strength;
+    if (raw >= 1) {
+      card.position.copy(home);
+      card.rotation.copy(homeR);
+      card.u.uFlash.value = 0;
+    }
+  }, { ease: ease.linear, owner: card });
+}
+
+/**
+ * Turns a card sideways (exhausted) or upright again, with a small hop so it doesn't scrape
+ * the table. A sideways card is wider than its slot, so `scale` can shrink it to fit.
+ */
+export function tap(tl: Timeline, card: CardView, tapped: boolean, scale = card.scale.x) {
+  tl.kill(card);
+  const s0 = card.scale.x;
+  const z0 = card.rotation.z;
+  const z1 = tapped ? -Math.PI / 2 : 0;
+  const h = card.position.z;
+  sfx.flip();
+  return tl.to(0.36, (k, raw) => {
+    card.rotation.z = lerp(z0, z1, k);
+    card.scale.setScalar(lerp(s0, scale, Math.min(raw * 1.5, 1)));
+    card.position.z = h + Math.sin(raw * Math.PI) * 0.4;
+    if (raw >= 1) card.position.z = h;
+  }, { ease: ease.outBack, owner: card });
+}
+
+/** Turns a card over where it lies: up, over with a slight curl, and down with a tap. */
+export async function flipOver(tl: Timeline, card: CardView) {
+  tl.kill(card);
+  const y0 = card.rotation.y;
+  const h = card.position.z;
+  const lift = CARD_W * card.scale.x * 0.62;
+  sfx.flip();
+  await tl.to(0.46, (k, raw) => {
+    const arc = Math.sin(raw * Math.PI);
+    card.rotation.y = y0 + Math.PI * k;
+    card.position.z = h + arc * lift;
+    card.bendExtra.x = arc * 0.07;
+  }, { ease: ease.inOutCubic, owner: card });
+  // Keep the angle small, so repeated flips don't wind it up.
+  card.rotation.y = Math.abs(Math.sin(y0 / 2)) > 0.5 ? 0 : Math.PI;
+  card.position.z = h;
+  card.bendExtra.x = 0;
+  sfx.thud(0.05);
+}
+
+/** A shake of the head for an illegal move. Small, quick, and it ends exactly where it began. */
+export function refuse(tl: Timeline, card: CardView) {
+  tl.kill(card);
+  const home = card.position.clone();
+  const z = card.rotation.z;
+  const amp = 0.16 * card.scale.x;
+  sfx.deny();
+  return tl.to(0.38, (_k, raw) => {
+    const w = Math.sin(raw * Math.PI * 5) * (1 - raw);
+    card.position.x = home.x + w * amp;
+    card.rotation.z = z - w * 0.07;
+    if (raw >= 1) {
+      card.position.copy(home);
+      card.rotation.z = z;
+    }
+  }, { ease: ease.linear, owner: card });
+}
+
+/** A stat gain: the card swells and snaps back while light gathers and rises off it. */
+export function buff(tl: Timeline, fx: Fx, card: CardView, color = 0x9dffb0) {
+  tl.kill(card);
+  const s = card.scale.x;
+  const at = card.position;
+  sfx.shimmer(-0.2);
+  fx.ring(at, { color, size: 5.5 * s, dur: 0.5, width: 0.05, amount: 1.2 });
+  fx.light.emit(34, {
+    kind: 'star', at, jitter: [CARD_W * 0.42 * s, CARD_H * 0.42 * s, 0.05], dir: UP, cone: 0.35, speed: [0.6, 2.2],
+    life: [0.5, 1.1], size: [0.05, 0.14], color: [color, 0xffffff], bright: [1.5, 3.2], drag: 1.2,
+  });
+  return tl.to(0.5, (_k, raw) => {
+    // Fast swell, slow settle: most of the growth happens in the first fifth.
+    const swell = Math.sin(Math.min(raw * 2.4, 1) * Math.PI) * 0.16 * (1 - raw * 0.4);
+    card.scale.setScalar(s * (1 + swell));
+    card.u.uFlash.value = Math.pow(1 - raw, 2) * 0.32;
+    if (raw >= 1) {
+      card.scale.setScalar(s);
+      card.u.uFlash.value = 0;
+    }
+  }, { ease: ease.linear, owner: card });
+}
+
+/**
+ * A riffle shuffle for a deck: packets peel off to alternate sides and drop back in.
+ * The cards are short-lived stand-ins showing only their backs, so the pile itself never changes.
+ */
+export async function shufflePile(tl: Timeline, pile: CardPile, scene: THREE.Object3D, backDef: CardDef, count = 8) {
+  const top = pile.topWorld();
+  const s = pile.top?.scale.x ?? 1;
+  const matte = finishById('matte').finish;
+  sfx.riffle(count, 0.055);
+  const jobs: Promise<void>[] = [];
+  for (let i = 0; i < count; i++) {
+    const side = i % 2 ? 1 : -1;
+    const c = new CardView(backDef, matte, { faceDown: true, bare: true });
+    c.scale.setScalar(s);
+    c.position.copy(top);
+    c.visible = false;
+    scene.add(c);
+    const out = new THREE.Vector3(top.x + side * CARD_W * s * (0.62 + Math.random() * 0.2), top.y + (Math.random() - 0.5) * 0.3, top.z + 0.55 + i * 0.05);
+    const lean = side * (0.2 + Math.random() * 0.15);
+    jobs.push(
+      tl.to(0.4, (_k, raw) => {
+        c.visible = true;
+        // Out and back along the same line, lifting through the middle.
+        const w = Math.sin(raw * Math.PI);
+        c.position.lerpVectors(top, out, w);
+        c.rotation.z = lean * w;
+        c.bendExtra.y = 0.06 * w;
+        c.update(1 / 60);
+      }, { ease: ease.inOutSine, delay: i * 0.055, owner: c }).then(() => c.dispose()),
+    );
+  }
+  // The pile jumps a little as each packet lands.
+  const z = pile.position.z;
+  void tl.to(0.4 + count * 0.055, (_k, raw) => {
+    pile.position.z = z + Math.abs(Math.sin(raw * Math.PI * count * 0.5)) * 0.03;
+    if (raw >= 1) pile.position.z = z;
+  }, { ease: ease.linear });
+  await Promise.all(jobs);
+}
+
+const tmpHit = new THREE.Vector3();
 const ZERO = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 const tmpQ = new THREE.Quaternion();

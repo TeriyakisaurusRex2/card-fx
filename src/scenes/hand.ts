@@ -102,9 +102,9 @@ export const handScene: SceneFactory = ({ stage, ui }) => {
     ),
     section(
       'Hover',
-      slider('Zoom', { min: 1, max: 1.8, value: p.hoverScale }, (v) => (p.hoverScale = v)).root,
+      slider('Zoom', { min: 1, max: 2, value: p.hoverScale }, (v) => (p.hoverScale = v)).root,
       slider('Neighbour push', { min: 0, max: 10, step: 0.1, value: p.pushDeg, format: (v) => `${v.toFixed(1)}°` }, (v) => (p.pushDeg = v)).root,
-      toggle('Tuck hand while idle', false, (v) => (p.tuck = v ? 1.5 : 0)),
+      toggle('Tuck hand while idle', true, (v) => (p.tuck = v ? 1.2 : 0)),
     ),
   );
   ui.append(el('div', { class: 'prompt prompt-top', text: 'Sweep across the fan · drag a card up past the middle to play it' }));

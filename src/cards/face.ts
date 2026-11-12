@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { CardDef, Faction, Rarity } from './data';
 import { RARITY_COLOR } from './data';
+import { KEYWORDS, drawKeywordIcon, splitRules } from './keywords';
 
 // Everything visual about a card's print is painted here with Canvas 2D:
 //   - a colour texture per card (art, text, frame paint)
@@ -21,7 +22,35 @@ const RULES = { x: 44, y: 594, w: 552, h: 262 };
 export const ART_RECT: Record<CardDef['layout'], THREE.Vector4> = {
   classic: new THREE.Vector4(ART.x / BASE_W, 1 - (ART.y + ART.h) / BASE_H, (ART.x + ART.w) / BASE_W, 1 - ART.y / BASE_H),
   fullart: new THREE.Vector4(0.02, 0.015, 0.98, 0.985),
+  modern: new THREE.Vector4(0.02, 0.015, 0.98, 0.985),
 };
+
+/** Display faces for names, type lines and numbers. The Layout tab switches between them. */
+export interface TitleFont {
+  id: string;
+  family: string;
+  weight: number;
+  note: string;
+}
+export const TITLE_FONTS: TitleFont[] = [
+  { id: 'cinzel', family: 'Cinzel', weight: 700, note: 'Roman capitals. The original.' },
+  { id: 'marcellus', family: 'Marcellus', weight: 400, note: 'Flared Roman, lighter and cleaner.' },
+  { id: 'cormorant', family: 'Cormorant SC', weight: 700, note: 'High-contrast book serif, small caps.' },
+  { id: 'spectral', family: 'Spectral SC', weight: 700, note: 'Sturdy modern serif, small caps. The default.' },
+  { id: 'forum', family: 'Forum', weight: 400, note: 'Wide classical capitals, airy.' },
+  { id: 'fell', family: 'IM Fell English SC', weight: 400, note: 'Rough 17th-century printing.' },
+  { id: 'almendra', family: 'Almendra', weight: 700, note: 'Calligraphic, storybook.' },
+  { id: 'grenze', family: 'Grenze Gotisch', weight: 700, note: 'Blackletter, heavy and grim.' },
+  { id: 'alegreya', family: 'Alegreya Sans SC', weight: 700, note: 'Humanist sans, small caps.' },
+];
+let titleFont = TITLE_FONTS.find((f) => f.id === 'spectral')!;
+export const getTitleFont = () => titleFont;
+/** Changes the display face. Cards pick it up the next time their texture is requested. */
+export function setTitleFont(id: string) {
+  titleFont = TITLE_FONTS.find((f) => f.id === id) ?? TITLE_FONTS[0];
+}
+const titleFamily = () => `"${titleFont.family}", serif`;
+const tf = (size: number) => `${titleFont.weight} ${size}px ${titleFamily()}`;
 
 interface Palette {
   frame: string;
@@ -137,7 +166,7 @@ function gem(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, hi:
 }
 
 function gemNumber(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, size: number) {
-  ctx.font = `700 ${size}px Cinzel, serif`;
+  ctx.font = tf(size);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.lineWidth = 7;
@@ -161,7 +190,7 @@ function speckle(ctx: CanvasRenderingContext2D, alpha: number, count = 2400) {
 function drawTitle(ctx: CanvasRenderingContext2D, def: CardDef, p: Palette, y: number) {
   const left = TITLE.x + 92;
   const maxW = TITLE.w - 112;
-  fitFont(ctx, def.name, 'Cinzel, serif', 700, 37, maxW);
+  fitFont(ctx, def.name, titleFamily(), titleFont.weight, 37, maxW);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(0,0,0,.75)';
@@ -279,7 +308,7 @@ function paintClassic(ctx: CanvasRenderingContext2D, def: CardDef, p: Palette) {
 
   drawTitle(ctx, def, p, TITLE.y + TITLE.h / 2 + 1);
   const typeLine = def.subtype ? `${def.type} — ${def.subtype}` : def.type;
-  ctx.font = '600 25px Cinzel, serif';
+  ctx.font = tf(25);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#e6d6ad';
@@ -332,7 +361,7 @@ function paintFullArt(ctx: CanvasRenderingContext2D, def: CardDef, p: Palette) {
 
   drawTitle(ctx, def, p, 64);
 
-  ctx.font = '600 24px Cinzel, serif';
+  ctx.font = tf(24);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#f0d894';
@@ -351,6 +380,155 @@ function paintFullArt(ctx: CanvasRenderingContext2D, def: CardDef, p: Palette) {
   gemNumber(ctx, String(def.cost), 66, 66, 48);
 }
 
+/** Longest body the modern layout prints before cutting it short with an ellipsis. */
+const MODERN_TEXT = { size: 30, lh: 39, maxW: 470 };
+
+/** Wraps the modern body text and reports whether it had to be cut. */
+function modernLines(ctx: CanvasRenderingContext2D, body: string, maxLines: number) {
+  ctx.font = `500 ${MODERN_TEXT.size}px Inter, sans-serif`;
+  const all = wrapText(ctx, body, MODERN_TEXT.maxW);
+  if (all.length <= maxLines) return { lines: all, cut: false };
+  const lines = all.slice(0, maxLines);
+  let last = lines[maxLines - 1];
+  while (last && ctx.measureText(last + '…').width > MODERN_TEXT.maxW) last = last.slice(0, last.lastIndexOf(' '));
+  lines[maxLines - 1] = last.replace(/[.,;:]$/, '') + '…';
+  return { lines, cut: true };
+}
+
+/** True when the modern layout can't fit a card's whole text, so a tap should expand it. */
+export function modernIsCut(def: CardDef) {
+  const { keywords, body } = splitRules(def);
+  const { ctx } = makeCanvas(1);
+  return modernLines(ctx, body, keywords.length ? 2 : 3).cut;
+}
+
+/**
+ * The modern layout: art across the whole card, and a dark fade over the lower third that
+ * carries a centred name, a small subtype, keyword badges and at most two or three lines
+ * of large text. Anything longer is cut with an ellipsis and shown in full on expand.
+ */
+function paintModern(ctx: CanvasRenderingContext2D, def: CardDef, p: Palette) {
+  const img = art.get(def.art);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+  if (img) drawCover(ctx, img, 0, 0, BASE_W, BASE_H, def.focusY ?? 0.35);
+
+  // The fade the words sit on, tinted slightly toward the faction's dark colour.
+  const bot = ctx.createLinearGradient(0, 400, 0, 640);
+  bot.addColorStop(0, 'rgba(6,4,3,0)');
+  bot.addColorStop(0.55, 'rgba(6,4,3,.78)');
+  bot.addColorStop(1, 'rgba(6,4,3,.96)');
+  ctx.fillStyle = bot;
+  ctx.fillRect(0, 400, BASE_W, BASE_H - 400);
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = p.lo;
+  ctx.fillRect(0, 640, BASE_W, BASE_H - 640);
+  ctx.globalAlpha = 1;
+  const top = ctx.createLinearGradient(0, 0, 0, 130);
+  top.addColorStop(0, 'rgba(0,0,0,.6)');
+  top.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = top;
+  ctx.fillRect(0, 0, BASE_W, 130);
+
+  // A slim frame: one band of faction colour and a hairline inside it.
+  ctx.lineWidth = 11;
+  ctx.strokeStyle = p.frame;
+  rr(ctx, 5.5, 5.5, BASE_W - 11, BASE_H - 11, 30);
+  ctx.stroke();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = p.hi;
+  rr(ctx, 12, 12, BASE_W - 24, BASE_H - 24, 25);
+  ctx.stroke();
+
+  const { keywords, body } = splitRules(def);
+  const cx = BASE_W / 2;
+  ctx.textBaseline = 'middle';
+
+  // Name: large capitals, centred, shrunk only if it would run off the card.
+  const name = def.name.toUpperCase();
+  ctx.letterSpacing = '2px';
+  fitFont(ctx, name, titleFamily(), titleFont.weight, 50, BASE_W - 80);
+  ctx.textAlign = 'center';
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(0,0,0,.7)';
+  ctx.strokeText(name, cx, 598);
+  ctx.fillStyle = '#fbf1d6';
+  ctx.fillText(name, cx, 598);
+
+  // Subtype, small, under the name, with a short rule either side.
+  const sub = (def.type === 'Unit' ? def.subtype ?? 'Unit' : def.subtype ? `${def.type} · ${def.subtype}` : def.type).toUpperCase();
+  ctx.letterSpacing = '4px';
+  ctx.font = '600 19px Inter, sans-serif';
+  ctx.fillStyle = p.hi;
+  ctx.fillText(sub, cx + 2, 641);
+  const sw = ctx.measureText(sub).width / 2 + 16;
+  ctx.strokeStyle = p.hi;
+  ctx.globalAlpha = 0.55;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - sw - 54, 641); ctx.lineTo(cx - sw, 641);
+  ctx.moveTo(cx + sw, 641); ctx.lineTo(cx + sw + 54, 641);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.letterSpacing = '0px';
+
+  // Keyword badges: an icon in a disc, then the word, in a row centred on the card.
+  let y = 668;
+  if (keywords.length) {
+    const h = 42;
+    ctx.font = '600 22px Inter, sans-serif';
+    const label = (k: { name: string; note?: string }) => (k.note ? `${k.name} · ${k.note}` : k.name);
+    const widths = keywords.map((k) => h + 8 + ctx.measureText(label(k)).width + 18);
+    const gap = 12;
+    let x = cx - (widths.reduce((a, b) => a + b, 0) + gap * (keywords.length - 1)) / 2;
+    keywords.forEach((k, i) => {
+      const w = widths[i];
+      ctx.fillStyle = 'rgba(12,9,7,.86)';
+      rr(ctx, x, y, w, h, h / 2);
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = p.hi;
+      ctx.stroke();
+      ctx.fillStyle = p.frame;
+      ctx.beginPath();
+      ctx.arc(x + h / 2, y + h / 2, h / 2 - 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#fff6dc';
+      ctx.fillStyle = '#fff6dc';
+      drawKeywordIcon(ctx, k.name, x + h / 2, y + h / 2, 11);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#f3e7c8';
+      ctx.fillText(label(k), x + h + 8, y + h / 2 + 1);
+      x += w + gap;
+    });
+    y += h + 14;
+  } else y += 6;
+
+  // Body: centred, large, with any keyword it mentions picked out in the accent colour.
+  if (body) {
+    const { lines } = modernLines(ctx, body, keywords.length ? 2 : 3);
+    const bottom = def.power !== undefined ? 806 : 836;
+    let ly = y + Math.max(0, (bottom - y - lines.length * MODERN_TEXT.lh) / 2) + MODERN_TEXT.lh / 2;
+    ctx.textAlign = 'left';
+    const space = ctx.measureText(' ').width;
+    for (const line of lines) {
+      let x = cx - ctx.measureText(line).width / 2;
+      for (const word of line.split(' ')) {
+        ctx.fillStyle = KEYWORDS[word.replace(/[^A-Za-z]/g, '')] ? p.accent : '#efe6d2';
+        ctx.fillText(word, x, ly);
+        x += ctx.measureText(word).width + space;
+      }
+      ly += MODERN_TEXT.lh;
+    }
+  }
+
+  rarityGem(ctx, def.rarity, cx, 858);
+  drawStats(ctx, def, 836);
+  if (def.type === 'Sovereign') gem(ctx, 66, 66, 46, '#ffe9a8', '#c79524', '#3d2605');
+  else gem(ctx, 66, 66, 46, '#a6d0ff', '#2f6fb8', '#0a2245');
+  gemNumber(ctx, String(def.cost), 66, 66, 48);
+}
+
 const faceCache = new Map<string, THREE.CanvasTexture>();
 const finishTex = (c: HTMLCanvasElement, srgb: boolean) => {
   const t = new THREE.CanvasTexture(c);
@@ -363,11 +541,12 @@ const finishTex = (c: HTMLCanvasElement, srgb: boolean) => {
 
 /** Colour texture for a card, cached so a deck of duplicates costs one texture. */
 export function faceTexture(def: CardDef, scale = 1) {
-  const key = `${def.id}@${scale}`;
+  const key = `${def.id}:${def.layout}@${scale}:${titleFont.id}`;
   const hit = faceCache.get(key);
   if (hit) return hit;
   const { c, ctx } = makeCanvas(scale);
   if (def.layout === 'fullart') paintFullArt(ctx, def, PALETTE[def.faction]);
+  else if (def.layout === 'modern') paintModern(ctx, def, PALETTE[def.faction]);
   else paintClassic(ctx, def, PALETTE[def.faction]);
   const t = finishTex(c, true);
   faceCache.set(key, t);
@@ -503,6 +682,33 @@ function maskFullArt(ctx: CanvasRenderingContext2D) {
   domeGem(ctx, 570, 836, 40);
 }
 
+function maskModern(ctx: CanvasRenderingContext2D, hasStats: boolean) {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+  ctx.globalCompositeOperation = 'lighter';
+
+  // Art covers the card down to where the words begin, then hands over to "paper"
+  // (neither art nor frame), which is the region Text protection shields.
+  const g = ctx.createLinearGradient(0, 0, 0, BASE_H);
+  g.addColorStop(0, '#f00');
+  g.addColorStop(0.58, '#f00');
+  g.addColorStop(0.65, '#000');
+  g.addColorStop(1, '#000');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+  ctx.lineWidth = 11;
+  ctx.strokeStyle = '#0f0';
+  rr(ctx, 5.5, 5.5, BASE_W - 11, BASE_H - 11, 30);
+  ctx.stroke();
+  emboss(ctx, 2.5, 8, '#00f', () => rr(ctx, 6, 6, BASE_W - 12, BASE_H - 12, 30));
+  domeGem(ctx, 66, 66, 46);
+  if (hasStats) {
+    domeGem(ctx, 70, 836, 40);
+    domeGem(ctx, 570, 836, 40);
+  }
+}
+
 const maskCache = new Map<string, THREE.CanvasTexture>();
 export function maskTexture(def: CardDef) {
   // Spells have no stat gems, so they need their own mask or the gems' bumps would show.
@@ -512,6 +718,7 @@ export function maskTexture(def: CardDef) {
   if (hit) return hit;
   const { c, ctx } = makeCanvas(1);
   if (def.layout === 'fullart') maskFullArt(ctx);
+  else if (def.layout === 'modern') maskModern(ctx, hasStats);
   else maskClassic(ctx, hasStats);
   const t = finishTex(c, false);
   maskCache.set(key, t);

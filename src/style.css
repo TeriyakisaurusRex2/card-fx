@@ -56,13 +56,13 @@ html, body {
   height: 50px;
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 12px;
   padding: 0 16px;
   background: linear-gradient(rgba(10, 8, 6, 0.86), rgba(10, 8, 6, 0));
   pointer-events: none;
 }
 .brand {
-  font: 700 14px Cinzel, serif;
+  font: 700 14px "Spectral SC", serif;
   letter-spacing: 0.14em;
   color: var(--gold-hi);
   white-space: nowrap;
@@ -96,6 +96,9 @@ html, body {
   font: 500 12px Inter, sans-serif;
   cursor: pointer;
 }
+.fx-dial { pointer-events: auto; display: flex; align-items: center; gap: 8px; color: var(--ink-dim); font: 500 12px Inter, sans-serif; white-space: nowrap; }
+.fx-dial input { width: 64px; accent-color: var(--gold); margin: 0; }
+.fx-dial output { color: var(--gold-hi); font-variant-numeric: tabular-nums; min-width: 34px; }
 .icon-btn:hover { color: var(--ink); border-color: var(--edge-hi); }
 
 .panel {
@@ -128,7 +131,7 @@ html, body {
 .panel-left { left: 16px; }
 .panel h2 {
   margin: 0 0 10px;
-  font: 700 15px Cinzel, serif;
+  font: 700 15px "Spectral SC", serif;
   color: var(--gold-hi);
   letter-spacing: 0.03em;
 }
@@ -204,7 +207,7 @@ html, body {
   pointer-events: none;
   white-space: nowrap;
 }
-.label3d b { display: block; font: 600 12.5px Cinzel, serif; color: var(--ink); }
+.label3d b { display: block; font: 600 12.5px "Spectral SC", serif; color: var(--ink); }
 .label3d span { display: block; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); }
 
 .prompt {
@@ -212,7 +215,7 @@ html, body {
   left: calc(50% - var(--panel-shift));
   bottom: 10px;
   transform: translateX(-50%);
-  font: 600 15px Cinzel, serif;
+  font: 600 15px "Spectral SC", serif;
   letter-spacing: 0.06em;
   color: var(--gold-hi);
   text-shadow: 0 2px 8px #000, 0 0 18px rgba(0, 0, 0, 0.9);
@@ -240,7 +243,7 @@ html, body {
   display: grid;
   place-items: center;
   background: var(--bg-deep);
-  font: 600 14px Cinzel, serif;
+  font: 600 14px "Spectral SC", serif;
   letter-spacing: 0.2em;
   color: var(--gold);
   transition: opacity 0.4s;
@@ -258,3 +261,28 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .btn, .prompt, .center-actions { transition: none; }
 }
+
+.label3d.off { opacity: 0; }
+.font-item span { color: var(--ink); }
+.font-item small { text-align: right; max-width: 55%; }
+.card-detail {
+  position: absolute;
+  transform: translateY(-50%);
+  width: min(300px, 38vw);
+  background: var(--panel);
+  border: 1px solid var(--edge-hi);
+  border-radius: 10px;
+  padding: 14px 16px;
+  color: var(--ink);
+  font-size: 13.5px;
+  line-height: 1.45;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+.card-detail.off { opacity: 0; }
+.card-detail h4 { margin: 0; font-size: 21px; color: var(--gold-hi); letter-spacing: 0.03em; }
+.card-detail-sub { color: var(--ink-faint); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; margin: 2px 0 10px; }
+.card-detail-kw { border-top: 1px solid var(--edge); padding: 8px 0; }
+.card-detail-kw b { display: block; color: var(--gold-hi); font-weight: 600; }
+.card-detail-kw span { color: var(--ink-dim); }
+.card-detail p { border-top: 1px solid var(--edge); margin: 0; padding-top: 9px; }

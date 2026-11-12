@@ -15,11 +15,18 @@ type Phase = 'choose' | 'moving' | 'tear' | 'bursting' | 'reveal' | 'busy' | 'su
 
 const FACTIONS: Faction[] = ['ember', 'cairn', 'veil'];
 const RANK: Record<Rarity, number> = { common: 0, rare: 1, epic: 2, legendary: 3 };
-const TOP_SCALE = 1.22;
+const TOP_SCALE = 1.12;
 const CHOOSE_Z = 20;
 /** The face-down stack sits a little above centre, leaving room for the tray below it. */
-const STACK_Y = 0.42;
+const STACK_Y = 0.5;
 const REVEAL_Z = 1;
+/**
+ * Where a face-down card waits, n places back from the top of the stack. Each one is stepped
+ * up and to the right of the one in front, so the cards still to come peek out from behind
+ * the card being shown and the player can count them.
+ */
+const stackPos = (n: number) => new THREE.Vector3(n * 0.2, STACK_Y + n * 0.12, -n * 0.05);
+const FACE_DOWN = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
 
 const anyOf = <T,>(xs: T[]) => xs[Math.floor(Math.random() * xs.length)];
 
@@ -329,17 +336,15 @@ export const boosterScene: SceneFactory = ({ stage, ui }) => {
     });
 
     // The wrapper is blown downward; the cards keep their world pose as it leaves.
-    for (const c of cards) {
-      scene.attach(c);
-      c.setPainted(true);
-    }
+    for (const c of cards) scene.attach(c);
     const from = pack.position.clone();
     const startRot = pack.rotation.z;
-    void tl.to(0.75, (k) => {
+    // Fast at first, so the wrapper is clear of the cards almost at once.
+    void tl.to(0.6, (k) => {
       pack.position.set(from.x + k * 0.7, from.y - k * 11, from.z - k * 1.8);
       pack.rotation.set(k * 0.8, 0, startRot - k * 0.75);
       pack.uniforms.uLeak.value = 2.3 * (1 - k);
-    }, { ease: ease.inQuad }).then(() => (pack.visible = false));
+    }, { ease: ease.outCubic }).then(() => (pack.visible = false));
     void leak.fadeTo(0.55 + heavy * 0.5, 0.5);
     void tl.to(0.7, (k) => (backU.uGlowAmt.value = 0.05 + (1 - k) * 0.1), { ease: ease.outQuad });
 
@@ -347,15 +352,24 @@ export const boosterScene: SceneFactory = ({ stage, ui }) => {
     camZ.target = 12.5;
     camY.target = 0;
     const n = cards.length;
+    // First the cards rise straight up as one block while the wrapper drops away. They are
+    // still hidden by the wrapper's front during this, so they come out of its torn top
+    // instead of appearing through the foil.
+    await Promise.all(
+      cards.map((c) => flyTo(tl, c, { pos: c.position.clone().add(tmpE.set(0, 1, 0)) }, { dur: 0.12, ease: ease.outQuad })),
+    );
+    for (const c of cards) c.setPainted(true);
     await Promise.all(
       cards.map((c, i) => {
         const sx = (i - (n - 1) / 2) * 1.5;
         c.flex = 1;
         return flyTo(tl, c, {
-          pos: new THREE.Vector3(sx, 0.7 + Math.random() * 0.5, 0.4 + i * 0.04),
+          // Nearest-first in the same order as inside the pack and in the stack afterwards,
+          // so no two cards ever swap which one is in front while they overlap.
+          pos: new THREE.Vector3(sx, 0.9 + Math.random() * 0.5, 0.4 + (n - 1 - i) * 0.04),
           quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, (i - (n - 1) / 2) * -0.2)),
           scale: 0.92,
-        }, { dur: 0.52, ease: ease.outCubic, arc: new THREE.Vector3(sx * 0.6, 1.4, 0.6) });
+        }, { dur: 0.46, ease: ease.outCubic, arc: new THREE.Vector3(sx * 0.6, 0.9, 0.6) });
       }),
     );
     await tl.wait(0.1);
@@ -363,14 +377,9 @@ export const boosterScene: SceneFactory = ({ stage, ui }) => {
     await Promise.all(
       cards.map((c, i) => {
         // Face down, stacked, with the first card on top.
-        const depth = i;
-        const j = Math.sin(i * 12.9) * 0.05;
-        c.setShadow(0.5);
-        return flyTo(tl, c, {
-          pos: new THREE.Vector3(j, STACK_Y + j * 0.5, -depth * 0.05),
-          quat: new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, j)),
-          scale: TOP_SCALE,
-        }, { dur: 0.42, ease: ease.inOutCubic, arc: new THREE.Vector3(0, -0.2, 0.3) });
+        c.setShadow(0.4);
+        return flyTo(tl, c, { pos: stackPos(i), quat: FACE_DOWN, scale: TOP_SCALE },
+          { dur: 0.42, ease: ease.inOutCubic, arc: new THREE.Vector3(0, -0.2, 0.3) });
       }),
     );
     void leak.remove(0.5);
@@ -482,7 +491,10 @@ export const boosterScene: SceneFactory = ({ stage, ui }) => {
       void toSummary();
       return;
     }
-    await tl.wait(0.12);
+    for (let i = topIndex; i < cards.length; i++) {
+      void flyTo(tl, cards[i], { pos: stackPos(i - topIndex), quat: FACE_DOWN, scale: TOP_SCALE }, { dur: 0.26, ease: ease.outCubic });
+    }
+    await tl.wait(0.2);
     await presentTop();
   }
 

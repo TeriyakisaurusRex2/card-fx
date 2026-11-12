@@ -253,7 +253,7 @@ function printTexture(f: Faction) {
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '700 66px Cinzel, serif';
+  ctx.font = '700 66px "Spectral SC", serif';
   ctx.lineWidth = 7;
   ctx.strokeStyle = 'rgba(0,0,0,.8)';
   ctx.strokeText('SOVEREIGN', W / 2, 172);
@@ -264,11 +264,11 @@ function printTexture(f: Faction) {
   ctx.fillStyle = gold;
   ctx.fillText('SOVEREIGN', W / 2, 172);
 
-  ctx.font = '600 25px Cinzel, serif';
+  ctx.font = '600 25px "Spectral SC", serif';
   ctx.fillStyle = '#f6ecd3';
   ctx.fillText(t.label, W / 2, 222);
 
-  ctx.font = '600 30px Cinzel, serif';
+  ctx.font = '600 30px "Spectral SC", serif';
   ctx.fillStyle = '#fff3c4';
   ctx.fillText('BOOSTER PACK', W / 2, 800);
   ctx.font = '500 21px Inter, sans-serif';

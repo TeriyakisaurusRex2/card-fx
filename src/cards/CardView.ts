@@ -11,6 +11,10 @@ import { CARD_FRAG, CARD_VERT } from './shaders';
 export const sharedCardUniforms = {
   uTime: { value: 0 },
   uLightPos: { value: new THREE.Vector3(2.5, 3.5, 9) },
+  /** Global dial on top of each finish's own intensity; the top bar's slider drives it. */
+  uFxMaster: { value: 1 },
+  /** How much the title and rules boxes are shielded from foil: 1 = untouched, 0 = no shield. */
+  uTextGuard: { value: 1 },
 };
 
 /** Soft rounded rectangle, used for both drop shadows and glowing halos. */
@@ -118,6 +122,8 @@ export class CardView extends THREE.Group {
         uArtRect: { value: ART_RECT[def.layout] },
         uTime: sharedCardUniforms.uTime,
         uLightPos: sharedCardUniforms.uLightPos,
+        uFxMaster: sharedCardUniforms.uFxMaster,
+        uTextGuard: sharedCardUniforms.uTextGuard,
         uSeed: { value: seed },
         uShimmer: { value: new THREE.Vector2() },
         uBend: { value: new THREE.Vector3() },

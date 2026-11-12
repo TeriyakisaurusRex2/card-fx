@@ -17,8 +17,11 @@ export interface CardDef {
   rarity: Rarity;
   /** Art filename without extension, under public/art. */
   art: string;
-  /** classic = framed window + text box. fullart = art bleeds under everything. */
-  layout: 'classic' | 'fullart';
+  /**
+   * classic = framed window + text box. fullart = art bleeds under everything.
+   * modern = full art, centred name, keyword badges, short centred text.
+   */
+  layout: 'classic' | 'fullart' | 'modern';
   /** 0 = crop to the top of the art, 1 = crop to the bottom. */
   focusY?: number;
 }
@@ -26,15 +29,15 @@ export interface CardDef {
 const u = (
   art: string, name: string, faction: Faction, cost: number, power: number, toughness: number,
   subtype: string, text: string, rarity: Rarity, focusY = 0.3,
-): CardDef => ({ id: art, art, name, faction, type: 'Unit', subtype, cost, power, toughness, text, rarity, layout: 'classic', focusY });
+): CardDef => ({ id: art, art, name, faction, type: 'Unit', subtype, cost, power, toughness, text, rarity, layout: 'modern', focusY });
 
 const s = (
   art: string, name: string, faction: Faction, cost: number, text: string, rarity: Rarity, focusY = 0.4,
-): CardDef => ({ id: art, art, name, faction, type: 'Spell', cost, text, rarity, layout: 'classic', focusY });
+): CardDef => ({ id: art, art, name, faction, type: 'Spell', cost, text, rarity, layout: 'modern', focusY });
 
 const sov = (
   art: string, name: string, faction: Faction, cost: number, power: number, toughness: number, text: string,
-): CardDef => ({ id: art, art, name, faction, type: 'Sovereign', subtype: 'Throne', cost, power, toughness, text, rarity: 'legendary', layout: 'fullart' });
+): CardDef => ({ id: art, art, name, faction, type: 'Sovereign', subtype: 'Throne', cost, power, toughness, text, rarity: 'legendary', layout: 'modern', focusY: 0.4 });
 
 export const CARDS: CardDef[] = [
   sov('ember_sov_pyrarch', 'The Pyrarch', 'ember', 7, 7, 6, 'Edict — Your units have Swift. When The Pyrarch strikes, ignite every enemy lane.'),

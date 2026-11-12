@@ -34,13 +34,23 @@ export const DEFAULT_HAND: HandParams = {
   maxSpreadDeg: 42,
   baseY: -3,
   cardScale: 0.9,
-  hoverScale: 1.28,
+  hoverScale: 1.5,
   hoverY: -1.5,
-  pushDeg: 3.4,
-  tuck: 0,
+  pushDeg: 4.6,
+  tuck: 1.2,
   curl: 0.008,
   halfWidth: 8,
 };
+
+/**
+ * How the hand's springs feel. Stiffness says how hard a spring pulls toward its target and
+ * damping how hard it brakes. Each pair here is "critically damped" (damping = 2 x the
+ * square root of stiffness): the fastest a spring can arrive without overshooting, so
+ * nothing wobbles. Higher stiffness = quicker.
+ */
+const SNAP = { k: 900, d: 60 }; // hover, making room, returning: settles in about 0.15s
+const ARRIVE = { k: 240, d: 31 }; // a card drawn into the hand glides in over about 0.3s
+const DRAG = { k: 2600, d: 102 }; // a held card is all but glued to the pointer
 
 interface Slot {
   card: CardView;
@@ -86,7 +96,7 @@ export class HandController {
 
   hovered: Slot | null = null;
   dragging: Slot | null = null;
-  private tuckK = new Spring(1, 90, 15);
+  private tuckK = new Spring(1, 700, 53);
   private grab = new THREE.Vector2();
   private pointerLocal = new THREE.Vector2();
   private pointerOn = false;
@@ -125,13 +135,13 @@ export class HandController {
     const mk = (v: number, k: number, d: number) => new Spring(v, k, d);
     const slot: Slot = {
       card,
-      x: mk(card.position.x, 120, 16),
-      y: mk(card.position.y, 120, 16),
-      z: mk(card.position.z, 170, 24),
-      rot: mk(wrapAngle(r.z), 110, 16),
-      rx: mk(wrapAngle(r.x), 110, 18),
-      ry: mk(wantY + wrapAngle(r.y - wantY), 90, 15),
-      s: mk(card.scale.x, 150, 20),
+      x: mk(card.position.x, ARRIVE.k, ARRIVE.d),
+      y: mk(card.position.y, ARRIVE.k, ARRIVE.d),
+      z: mk(card.position.z, SNAP.k, SNAP.d),
+      rot: mk(wrapAngle(r.z), ARRIVE.k, ARRIVE.d),
+      rx: mk(wrapAngle(r.x), ARRIVE.k, ARRIVE.d),
+      ry: mk(wantY + wrapAngle(r.y - wantY), ARRIVE.k, ARRIVE.d),
+      s: mk(card.scale.x, SNAP.k, SNAP.d),
       restX: 0,
       restY: 0,
       restRot: 0,
@@ -166,8 +176,10 @@ export class HandController {
     this.grab.set(this.dragging.x.value - this.pointerLocal.x, this.dragging.y.value - this.pointerLocal.y);
     // Pull the grabbed point toward the pointer a bit, so the card doesn't hang off it.
     this.grab.multiplyScalar(0.35);
-    this.dragging.x.stiffness = this.dragging.y.stiffness = 420;
-    this.dragging.x.damping = this.dragging.y.damping = 32;
+    this.dragging.x.stiffness = this.dragging.y.stiffness = DRAG.k;
+    this.dragging.x.damping = this.dragging.y.damping = DRAG.d;
+    this.dragging.rot.stiffness = SNAP.k;
+    this.dragging.rot.damping = SNAP.d;
     sfx.draw();
     return true;
   }
@@ -179,8 +191,8 @@ export class HandController {
     this.updatePointer();
     this.events.onDrag?.(d.card, d.card.getWorldPosition(tmpW));
     this.dragging = null;
-    d.x.stiffness = d.y.stiffness = 120;
-    d.x.damping = d.y.damping = 16;
+    d.x.stiffness = d.y.stiffness = SNAP.k;
+    d.x.damping = d.y.damping = SNAP.d;
     const world = d.card.getWorldPosition(new THREE.Vector3());
     if (this.events.onRelease?.(d.card, world)) return;
     sfx.whoosh(0.1);
@@ -329,7 +341,7 @@ export class HandController {
 
     for (const s of this.slots) {
       // A travelling card rides above the fan, so its lean can't swing through a neighbour.
-      if (s !== d && s !== this.hovered) s.z.target += Math.min(Math.hypot(s.x.velocity, s.y.velocity) * 0.09, 0.7);
+      if (s !== d && s !== this.hovered) s.z.target += Math.min(Math.hypot(s.x.velocity, s.y.velocity) * 0.035, 0.7);
       s.card.position.set(s.x.update(dt), s.y.update(dt), s.z.update(dt));
       s.card.rotation.set(s.rx.update(dt), s.ry.update(dt), s.rot.update(dt));
       s.card.scale.setScalar(s.s.update(dt));
@@ -337,6 +349,11 @@ export class HandController {
       if (s.arriving && Math.hypot(s.x.value - s.x.target, s.y.value - s.y.target) < 0.3) {
         s.arriving = false;
         s.card.setLayer(CardLayer.hand);
+        // Once it has landed, the card answers the pointer as crisply as the rest.
+        for (const sp of [s.x, s.y, s.rot, s.rx, s.ry]) {
+          sp.stiffness = SNAP.k;
+          sp.damping = SNAP.d;
+        }
       }
     }
   }

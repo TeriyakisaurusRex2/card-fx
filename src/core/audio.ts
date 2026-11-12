@@ -121,5 +121,19 @@ export const sfx = {
     for (let i = 0; i < 6; i++) tone({ freq: rand(1800, 5200), dur: rand(0.06, 0.2), gain: 0.05, delay: i * 0.025, type: 'triangle' });
     noise({ dur: 0.3, from: 6000, to: 2000, gain: 0.25, q: 0.7 });
   },
+  /** Two flat blips: "you can't do that". */
+  deny: () => {
+    tone({ freq: 170, to: 150, dur: 0.09, gain: 0.16, type: 'square' });
+    tone({ freq: 150, to: 120, dur: 0.12, gain: 0.16, type: 'square', delay: 0.11 });
+  },
+  /** A short strike, lighter than a card landing. */
+  hit: (weight = 0.5) => {
+    noise({ dur: 0.09, from: 3800, to: 700, gain: 0.3, q: 0.9 });
+    tone({ freq: 150, to: 55, dur: 0.14 + 0.1 * weight, gain: 0.35 + 0.25 * weight });
+  },
+  /** Cards riffling together. */
+  riffle: (n = 7, gap = 0.05) => {
+    for (let i = 0; i < n; i++) noise({ dur: 0.045, from: rand(2600, 4200), to: rand(1400, 2200), gain: 0.09, q: 1.6, delay: i * gap });
+  },
   sand: () => noise({ dur: 1, from: 5000, to: 8200, gain: 0.08, q: 0.6, attack: 0.3 }),
 };

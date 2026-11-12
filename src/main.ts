@@ -1,20 +1,31 @@
 import '@fontsource/cinzel/600.css';
 import '@fontsource/cinzel/700.css';
+import '@fontsource/marcellus/400.css';
+import '@fontsource/cormorant-sc/700.css';
+import '@fontsource/spectral-sc/600.css';
+import '@fontsource/spectral-sc/700.css';
+import '@fontsource/forum/400.css';
+import '@fontsource/im-fell-english-sc/400.css';
+import '@fontsource/almendra/700.css';
+import '@fontsource/grenze-gotisch/700.css';
+import '@fontsource/alegreya-sans-sc/700.css';
 import '@fontsource/inter/400.css';
 import '@fontsource/inter/500.css';
 import '@fontsource/inter/600.css';
 import './style.css';
 import { CARDS } from './cards/data';
-import { loadArt } from './cards/face';
+import { TITLE_FONTS, loadArt } from './cards/face';
 import { isMuted, setMuted, unlockAudio } from './core/audio';
 import { Stage } from './core/stage';
 import { el } from './core/ui';
+import { sharedCardUniforms } from './cards/CardView';
 import type { SceneFactory, ShowScene } from './scenes/scene';
 import { boardScene } from './scenes/board';
 import { boosterScene } from './scenes/booster';
 import { galleryScene } from './scenes/gallery';
 import { handScene } from './scenes/hand';
 import { inspectorScene } from './scenes/inspector';
+import { layoutScene } from './scenes/layouts';
 
 const ROUTES: { id: string; label: string; make: SceneFactory }[] = [
   { id: 'finishes', label: 'Finishes', make: galleryScene },
@@ -22,6 +33,7 @@ const ROUTES: { id: string; label: string; make: SceneFactory }[] = [
   { id: 'booster', label: 'Booster', make: boosterScene },
   { id: 'hand', label: 'Hand', make: handScene },
   { id: 'board', label: 'Board', make: boardScene },
+  { id: 'layout', label: 'Layout', make: layoutScene },
 ];
 
 async function boot() {
@@ -31,7 +43,9 @@ async function boot() {
   // Canvas text bakes whatever font is ready at draw time, so fonts must load first.
   await Promise.all([
     document.fonts.load('700 40px Cinzel'),
-    document.fonts.load('600 25px Cinzel'),
+    document.fonts.load('600 22px Inter'),
+    ...TITLE_FONTS.map((f) => document.fonts.load(`${f.weight} 40px "${f.family}"`)),
+    document.fonts.load('600 25px "Spectral SC"'),
     document.fonts.load('500 28px Inter'),
     loadArt(CARDS.map((c) => c.art).concat('_menu_hero')),
   ]);
@@ -51,9 +65,24 @@ async function boot() {
     setMuted(!isMuted());
     mute.textContent = isMuted() ? 'Sound off' : 'Sound on';
   });
+  // Global dials. Each drives one uniform shared by every card, and is remembered.
+  const dial = (label: string, key: string, u: { value: number }) => {
+    const saved = parseFloat(localStorage.getItem(key) ?? '');
+    if (Number.isFinite(saved)) u.value = saved;
+    const out = el('output', { text: `${Math.round(u.value * 100)}%` });
+    const input = el('input', { type: 'range', min: 0, max: 1, step: 0.01, value: u.value, 'aria-label': label });
+    input.addEventListener('input', () => {
+      u.value = parseFloat(input.value);
+      out.textContent = `${Math.round(u.value * 100)}%`;
+      localStorage.setItem(key, String(u.value));
+    });
+    return el('label', { class: 'fx-dial' }, el('span', { text: label }), input, out);
+  };
+  const fxDial = dial('Effect strength', 'cardfx.fx', sharedCardUniforms.uFxMaster);
+  const guardDial = dial('Text protection', 'cardfx.guard', sharedCardUniforms.uTextGuard);
   uiRoot.append(
     sceneUi,
-    el('header', { class: 'topbar' }, el('div', { class: 'brand', text: 'CARD FX' }), el('nav', { class: 'tabs' }, ...tabs), el('div', { class: 'spacer' }), mute),
+    el('header', { class: 'topbar' }, el('div', { class: 'brand', text: 'CARD FX' }), el('nav', { class: 'tabs' }, ...tabs), el('div', { class: 'spacer' }), fxDial, guardDial, mute),
   );
 
   let current: ShowScene | null = null;

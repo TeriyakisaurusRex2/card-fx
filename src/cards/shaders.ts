@@ -38,6 +38,17 @@ vec3 voronoi(vec2 p){
   }
   return vec3(md,n+mg);
 }
+// Nearest cell only, which is much cheaper than voronoi(): xy = cell id, zw = offset to its seed.
+vec4 voroCell(vec2 p){
+  vec2 n=floor(p),f=fract(p),mg=vec2(0.),mr=vec2(0.);
+  float md=8.;
+  for(int j=-1;j<=1;j++)for(int i=-1;i<=1;i++){
+    vec2 g=vec2(float(i),float(j)),r=g+hash22(n+g)-f;
+    float d=dot(r,r);
+    if(d<md){md=d;mr=r;mg=g;}
+  }
+  return vec4(n+mg,mr);
+}
 // A fake photo studio to reflect: a dim gradient room with tall strip lights.
 // A flat card only ever reflects a narrow slice of the world, so the strips are packed
 // tightly; a small tilt sweeps them across the surface.
@@ -98,6 +109,8 @@ uniform vec2 uShimmer;
 uniform vec3 uEdgeColor;
 
 uniform vec3 uMetal,uPrism,uPillars,uCosmos,uGlitter,uShards,uEtch,uPoly,uMetalTint;
+uniform vec3 uFracture,uBeams,uBurst,uIris,uMosaic;
+uniform float uFlow,uGlitterTint,uIntensity,uFxMaster,uVary,uVaryScale,uTextGuard;
 uniform float uBrush,uGild,uDepth,uSweep,uFire,uRelief,uGloss,uHue;
 
 uniform float uDissolve,uDissolveMode,uFlash,uDim;
@@ -106,6 +119,17 @@ uniform vec3 uBurnColor;
 varying vec2 vUv;
 varying vec3 vWorld,vN,vT,vB;
 varying float vFace;
+
+// Angle window. x is a phase in whole cycles that changes as the card tilts. Real foil is
+// dark across most of a cycle: a soft glow over a modest range of angles, and a bright core
+// only at the centre of that range. Returns 0 (plain card) to 1 (full flash).
+float angleWin(float x){
+  float s=.5+.5*cos(x*6.28318);
+  return smoothstep(.62,.97,s)*.42+smoothstep(.95,.998,s)*.58;
+}
+// The same window seen by two eyes a little apart and averaged. dx is how far the phase
+// moves between the eyes. The core rarely lines up for both, so flashes stay see-through.
+float angleWin2(float x,float dx){ return .5*(angleWin(x-dx)+angleWin(x+dx)); }
 
 // Shared compositing for rainbow foil. Mostly it multiplies the print by the rainbow, so
 // the image survives underneath; a small additive part lets highlights glow. This is why
@@ -222,6 +246,9 @@ void main(){
   float l=clamp(luma(alb)*1.6,0.,1.);
   float specTight=pow(max(dot(Nt,Ht),0.),420.);
 
+  // The plain lit print, kept so every foil layer below can be faded back toward it.
+  vec3 plain=col;
+
   // ---- gild: art rendered as a gold duotone ----
   float gild=uGild*rArt*F;
   if(gild>.001){
@@ -257,18 +284,29 @@ void main(){
   float a=dot(uPrism,reg)*F;
   if(a>.001){
     float ph=dot(Vt.xy,vec2(1.8,1.2))*1.55+dot(uv,vec2(.55,.85))+(fbm(uv*3.+uSeed)-.5)*.38+uHue;
-    float band=.32+.68*pow(.5+.5*cos((dot(Vt.xy,vec2(1.,.65))*3.2+dot(uv,vec2(1.2,1.7))*2.1)*3.14159),2.);
+    // The rainbow lives in a band that sweeps across as the card tilts; outside it the
+    // film is nearly clear.
+    float band=.13+.87*pow(.5+.5*cos((dot(Vt.xy,vec2(1.,.65))*3.2+dot(uv,vec2(1.2,1.7))*2.1)*3.14159),2.8);
+    if(uFlow>.001){
+      // Liquid holo: noise fed through itself bends the straight bands into pooled, marbled
+      // shapes, and tilting slides the whole pattern as if the film were wet.
+      vec2 w=uv*vec2(1.5,2.1)+uSeed+Vt.xy*.35;
+      float fl=fbm(w+fbm(w*1.7+3.1)*1.6);
+      ph+=(fl-.5)*2.6*uFlow;
+      band=mix(band,.18+.82*smoothstep(.34,.76,fbm(w*1.3-Vt.xy*.6)),uFlow);
+      col+=vec3(.9,.95,1.)*pow(smoothstep(.45,.8,fl),3.)*.1*a*uFlow*(.3+l);
+    }
     foil(col,l,spectral(ph),.8*band,a);
   }
 
   // ---- sun pillars: bright vertical bars, rainbow up the bar, fine diagonal foil lines ----
   a=dot(uPillars,reg)*F;
   if(a>.001){
-    float bars=pow(.5+.5*sin((uv.x*5.+Vt.x*11.+Vt.y*3.)*3.14159),1.3);
+    float bars=pow(.5+.5*sin((uv.x*5.+Vt.x*11.+Vt.y*3.)*3.14159),2.8);
     float ph=uv.y*1.5+Vt.y*2.4+Vt.x*.8+uHue;
     float coord=(uv.x+uv.y*1.4)*210.;
     float lines=mix(.55,.45+.55*(.5+.5*sin(coord*3.14159)),fineFade(coord));
-    foil(col,l,spectral(ph),1.*(.08+.92*bars)*lines,a);
+    foil(col,l,spectral(ph),1.*(.03+.97*bars)*lines,a);
   }
 
   // ---- cosmos: a nebula wash, then stars that each act as a tiny tilted mirror ----
@@ -301,6 +339,12 @@ void main(){
     vec3 fn=normalize(vec3((hash22(id)-.5)*1.1,1.));
     float s=pow(max(dot(fn,Ht),0.),260.);
     vec3 c=mix(vec3(1.,.95,.85),spectral(hash21(id+3.)+Vt.x),.4);
+    if(uGlitterTint>.001){
+      // Rainbow sand: every flake takes its colour from one broad gradient that slides with tilt.
+      vec3 sand=spectral(dot(uv,vec2(.7,.9))*1.1+dot(Vt.xy,vec2(1.4,1.))+uHue);
+      c=mix(c,spectral(dot(uv,vec2(.7,.9))*1.1+dot(Vt.xy,vec2(1.4,1.))+hash21(id+3.)*.2+uHue)*1.35,uGlitterTint);
+      col=mix(col,col*(.72+sand*.7),a*uGlitterTint*.28);
+    }
     float flake=smoothstep(.55,.15,length(fract(g)-.5));
     col+=c*s*flake*5.5*a;
     col=mix(col,col*(.9+.2*hash21(id+7.)),a);
@@ -312,12 +356,150 @@ void main(){
     vec3 v=voronoi(uv*vec2(6.2,8.7)+uSeed);
     vec2 id=v.yz;
     vec3 sn=normalize(vec3((hash22(id)-.5)*.9,1.));
-    float s=pow(max(dot(sn,Ht),0.),26.);
+    // Each facet is a small mirror: a soft glow near its angle, a hard flash exactly on it.
+    float fd=max(dot(sn,Ht),0.);
+    float s=pow(fd,55.)*.4+pow(fd,420.)*.75;
     float ph=hash21(id)*.9+dot(Vt.xy,vec2(1.6,1.1))+uHue;
     float edge=smoothstep(.045,.0,v.x);
-    foil(col,l,spectral(ph),.05+1.05*s,a);
-    col+=vec3(1.)*edge*(.05+s*.8)*a*.6;
-    col=mix(col,col*.72,edge*a*.4);
+    foil(col,l,spectral(ph),.02+1.05*s,a);
+    col+=vec3(1.)*edge*(.02+s*.8)*a*.6;
+    col=mix(col,col*.8,edge*a*.3);
+  }
+
+  // ---- shattered glass: scattered angular shards, nearly all dark, a few blazing one flat colour ----
+  a=dot(uFracture,reg)*F;
+  if(a>.001){
+    vec2 fp=uv*vec2(6.5,9.1)+uSeed*5.;
+    vec4 cell=voroCell(fp);
+    vec2 id=cell.xy;
+    // Two straight cuts through each cell break it into pieces of uneven size with hard,
+    // angular edges: some stay large, some become thin slivers.
+    for(int i=0;i<2;i++){
+      float ca=hash21(id+float(i)*3.7+1.3)*6.28318;
+      vec2 off=(hash22(id+float(i)*5.1)-.5)*.5;
+      float side=step(0.,dot(cell.zw+off,vec2(cos(ca),sin(ca))));
+      id+=side*vec2(17.3+float(i)*9.1,31.7);
+    }
+    vec2 h=hash22(id);
+    float ga=hash21(id+7.7)*6.28318;
+    // Each shard only responds to tilt along its own axis, and only inside a narrow window
+    // of angles. At any one pose most shards are outside their window and show the plain
+    // card; the few inside it light up edge to edge.
+    vec2 axis=vec2(cos(ga),sin(ga));
+    float t=dot(Vt.xy,axis);
+    float freq=1.6+h.x*2.2;
+    // Far away the shards blur together, so settle to their average.
+    float ff=1.-smoothstep(.3,.8,fwidth(fp.x)+fwidth(fp.y));
+    // Two eyes: the shard is evaluated from two viewpoints a little apart and the results
+    // averaged, as a person's left and right eye would see it. A shard at its exact angle
+    // for one eye is usually just off it for the other, so it reads as a bright film you
+    // can still see through, and only goes near-solid when both eyes catch it at once.
+    vec3 acc=vec3(0.);
+    float cov=0.;
+    for(int e=0;e<2;e++){
+      float te=t+(float(e)-.5)*.07*axis.x;
+      float s1=.5+.5*cos((te*freq+h.y)*6.28318);
+      // glow: a translucent tint across a modest range of angles.
+      // core: the near-opaque flash, only at the very centre of that range.
+      float glow=smoothstep(.95,.99,s1);
+      float core=smoothstep(.988,.999,s1);
+      float o=glow*.3+core*.55;
+      // The colour runs a short way through the spectrum across the shard, like the
+      // orange-to-green gradients on the real foil, and drifts as the angle changes.
+      vec3 rb=spectral(h.x*3.+te*(1.2+h.y*1.5)+dot(cell.zw,axis)*.14+uHue);
+      rb=pow(rb,vec3(1.5))*1.3;
+      acc+=rb*o;
+      cov+=o;
+    }
+    acc*=.5*ff;
+    cov*=.5*ff;
+    // A wider, much fainter window: shards about to light show as pale ghosts of themselves.
+    float sc=.5+.5*cos((t*freq+h.y)*6.28318);
+    float ghost=smoothstep(.78,.95,sc)*(1.-min(cov*2.,1.))*ff;
+    col=col*(1.-cov*a*.92)+acc*(.8+.3*l)*a*.92;
+    col+=acc*a*.18;
+    col=mix(col,col*.9+vec3(.62,.7,.85)*.16,ghost*a*.5);
+    col+=vec3(.5,.55,.7)*.012*a*(1.-ff);
+  }
+
+  // ---- laser rays: diagonal streaks of uneven width, each lighting at its own angle ----
+  a=dot(uBeams,reg)*F;
+  if(a>.001){
+    float d=uv.x*.8+uv.y*.84+uSeed;
+    float n=vnoise(vec2(d*6.,3.1))*.6+vnoise(vec2(d*17.,9.4))*.3+vnoise(vec2(d*43.,1.7))*.1;
+    float view=dot(Vt.xy,vec2(1.7,1.1));
+    // Each streak has its own angle window, so only some are lit at any pose.
+    float lit=angleWin2(n*2.6+view*1.6,.095);
+    foil(col,l,spectral(n*1.8+d*.4+view*1.3+uHue),.03+1.05*lit,a);
+    col+=mix(vec3(1.),spectral(n*1.8+d*.4+view*1.3+uHue),.6)*lit*.17*a*(.4+l);
+  }
+
+  // ---- starburst: tiled pinwheels whose wedges light up in turn as the card tilts ----
+  a=dot(uBurst,reg)*F;
+  if(a>.001){
+    vec2 g=uv*vec2(7.,9.8);
+    g.x+=.5*mod(floor(g.y),2.);
+    vec2 c=fract(g)-.5;
+    float seg=floor(atan(c.y,c.x)/6.28318*16.+.5);
+    float wa=seg/16.*6.28318;
+    float alt=mod(seg,2.);
+    float rad=length(c);
+    float t=dot(Vt.xy,vec2(cos(wa),sin(wa)));
+    // Each wedge has its own angle window: a couple per star are lit, the rest are clear.
+    float lit=angleWin2(t*4.+alt*.5+rad*.7,.14*cos(wa));
+    lit=mix(.16,lit,1.-smoothstep(.05,.16,fwidth(uv.x)*7.));
+    foil(col,l,spectral(t*2.5+alt*.33+rad*.8+uHue),.02+1.05*lit,a);
+  }
+
+  // ---- plumage: two-colour structural sheen, as on a pigeon's neck ----
+  a=dot(uIris,reg)*F;
+  if(a>.001){
+    vec2 g=uv*vec2(8.,12.);
+    float fade=1.-smoothstep(.05,.16,fwidth(uv.y)*12.);
+    // Overlapping feathers. Rows are staggered and each feather hangs down over the rows
+    // below it, so the search runs from the highest row that could cover this pixel.
+    vec2 q=vec2(0.),id=vec2(0.);
+    float d=1.;
+    for(int r=2;r>=0;r--){
+      float row=floor(g.y)+float(r);
+      float stagger=.5*mod(row,2.);
+      float cx=floor(g.x-stagger)+.5+stagger;
+      q=g-vec2(cx,row);
+      d=length(q*vec2(1.25,.62));
+      id=vec2(cx,row);
+      if(d<1.) break;
+    }
+    // Barbs fan out from the quill, the tip catches more light than the covered root,
+    // and a thin dark rim separates each feather from the one beneath.
+    float ba=atan(q.x,.35-q.y);
+    float barb=mix(1.,.8+.2*sin(ba*46.),fade);
+    float shade=mix(1.,(.5+.5*smoothstep(.1,.9,d))*(1.-.55*smoothstep(.9,1.,d)),fade);
+    float t=Vt.x*1.5+Vt.y+(d*.3+(hash21(id)-.5)*.2)*fade+fbm(uv*2.2+uSeed)*.6+uHue;
+    float k=.5+.5*sin(t*6.28318);
+    vec3 irid=mix(vec3(.08,.9,.5),vec3(.8,.24,.95),smoothstep(.3,.7,k));
+    irid=mix(irid,vec3(.1,.5,1.),pow(1.-abs(k-.5)*2.,3.)*.6);
+    irid=mix(irid,vec3(1.,.5,.45),smoothstep(.9,1.,k)*.5);
+    vec3 base=mix(col,luma(col)*vec3(.8,.86,1.),.75);
+    col=mix(col,base*irid*2.3*barb*shade,a*.85);
+    col+=irid*pow(max(dot(Nt,Ht),0.),9.)*.25*a*barb;
+  }
+
+  // ---- marble berry: a mosaic of cells, nearly all one structural colour with a few strays ----
+  a=dot(uMosaic,reg)*F;
+  if(a>.001){
+    vec2 g=uv*vec2(52.,73.)+uSeed*3.;
+    vec4 cell=voroCell(g);
+    vec2 h=hash22(cell.xy);
+    float ff=1.-smoothstep(.25,.7,fwidth(g.x));
+    float view=dot(Vt.xy,vec2(.9,.6));
+    float stray=step(.87,h.x);
+    float ph=uHue+.36+(h.y-.5)*.13+stray*(.25+h.y*.6)+view*(.14+h.x*.16);
+    vec3 sc=mix(spectral(uHue+.36+view*.22),spectral(ph),ff);
+    vec3 cn=normalize(vec3((h-.5)*.8,1.));
+    float lit=mix(.55,.3+.7*pow(max(dot(cn,Ht),0.),12.)+stray*.25,ff);
+    float dome=smoothstep(.4,.05,length(cell.zw));
+    col=mix(col,(.2+luma(col)*1.35)*sc*lit*1.9,a*.8);
+    col+=mix(vec3(1.),sc,.6)*dome*pow(max(dot(cn,Ht),0.),160.)*.9*a*ff;
   }
 
   // ---- etch: foil lives only in the engraved lines ----
@@ -337,6 +519,23 @@ void main(){
     float g=luma(shifted);
     shifted=mix(vec3(g),shifted,1.25);
     col=mix(col,max(shifted,vec3(0.)),a*.78);
+  }
+
+  // ---- intensity: one opacity for the whole foil stack, per finish times the global dial ----
+  if(isFront){
+    // Text guard: the title bar and rules box (the "paper" region of the mask) keep their
+    // plain print, fully at 1 and partly below it, so foil never fights the words.
+    float k=uIntensity*uFxMaster*(1.-rPaper*uTextGuard);
+    if(uVary>.001){
+      // Unevenness: a noise map fixed to the card, broad clouds plus finer grain, scales the
+      // intensity so the foil is strong in some patches and nearly absent in others. The
+      // seed makes every card's map different.
+      vec2 np=uv*vec2(1.,1.4)*uVaryScale+uSeed*7.3;
+      float n=fbm(np)*.7+fbm(np*3.7+11.)*.3;
+      n=smoothstep(.28,.72,n);
+      k*=mix(1.,n*1.5,uVary);
+    }
+    col=mix(plain,col,clamp(k,0.,1.));
   }
 
   // ---- laminate gloss ----

@@ -5,7 +5,7 @@ import { HandController } from '../cards/HandController';
 import { CARDS, type CardDef, RARITY_COLOR, type Rarity } from '../cards/data';
 import { type Finish, rollFinish } from '../cards/finishes';
 import { CARD_H, CARD_W } from '../cards/geometry';
-import { type ExitStyle, dissolveOut, flyTo, impact, trail } from '../cards/moves';
+import { type ExitStyle, attack, buff, dissolveOut, flipOver, flyTo, hitReact, impact, refuse, shufflePile, tap, trail } from '../cards/moves';
 import { GLSL_COMMON } from '../cards/shaders';
 import { Timeline, ease, lerp } from '../core/anim';
 import { sfx } from '../core/audio';
@@ -85,7 +85,12 @@ interface BoardCard {
   card: CardView;
   slot: number;
   side: 'player' | 'enemy';
+  tapped?: boolean;
+  /** Set while an action is playing, so a second click can't start another on top of it. */
+  busy?: boolean;
 }
+
+type ClickMode = 'destroy' | 'attack' | 'tap' | 'buff' | 'flip' | 'refuse';
 
 const anyOf = <T,>(xs: T[]) => xs[Math.floor(Math.random() * xs.length)];
 
@@ -263,7 +268,7 @@ export const boardScene: SceneFactory = ({ stage, ui }) => {
   function recoil(at: THREE.Vector3, strength: number, except: CardView) {
     for (const b of onBoard) {
       const c = b.card;
-      if (c === except) continue;
+      if (c === except || b.busy) continue;
       const dx = c.position.x - at.x;
       const dy = c.position.y - at.y;
       const dist = Math.hypot(dx, dy) || 1;
@@ -471,6 +476,68 @@ export const boardScene: SceneFactory = ({ stage, ui }) => {
     await removeCard(b.card, b.side === 'player' ? grave : enemyGrave);
   }
 
+  // ---- ACTIONS ON CARDS IN PLAY ----
+  let clickMode: ClickMode = 'attack';
+
+  // A tapped card lies sideways, so it is shrunk just enough to stay inside its slot.
+  const scaleOf = (b: BoardCard) => TABLE_SCALE * (b.tapped ? 0.84 : 1);
+
+  /** Puts a card squarely back on its slot, in case a flinch or landing bounce was still playing. */
+  const rest = (b: BoardCard) => {
+    tl.kill(b.card);
+    const home = (b.side === 'player' ? playerSlots : enemySlots)[b.slot].pos;
+    b.card.position.copy(home);
+    b.card.rotation.x = 0;
+    b.card.scale.setScalar(scaleOf(b));
+    b.card.u.uFlash.value = 0;
+  };
+
+  /** One unit strikes another, or the opposing player if their side is empty. */
+  async function attackWith(b: BoardCard, target?: BoardCard) {
+    const foes = onBoard.filter((o) => o.side !== b.side && !o.busy);
+    const victim = target ?? (foes.length ? anyOf(foes) : null);
+    const at = victim
+      ? victim.card.position.clone()
+      : new THREE.Vector3(b.card.position.x * 0.4, b.side === 'player' ? ENEMY_Y + 2.6 : PLAYER_Y - 2.8, 0.016);
+    const heavy = RANK[b.card.def.rarity];
+    if (victim) {
+      victim.busy = true;
+      rest(victim);
+    }
+    await attack(tl, b.card, at, {
+      onHit: (point, dir) => {
+        sfx.hit(0.3 + heavy * 0.2);
+        stage.shake(0.16 + heavy * 0.08);
+        fx.flash(point, { color: 0xfff0d0, size: 2.6 + heavy * 0.5, amount: 1.2, dur: 0.16 });
+        fx.ring(point, { color: 0xffe2b0, size: 3 + heavy, dur: 0.3, width: 0.05, amount: 1 });
+        // Sparks carry on in the direction of the blow.
+        fx.light.emit(26 + heavy * 12, {
+          kind: 'spark', at: point, jitter: [0.2, 0.2, 0.05], dir, cone: 0.9, speed: [2, 8], flatten: 0.5,
+          life: [0.2, 0.5], size: [0.018, 0.04], color: [0xffe9b8, 0xffffff, RARITY_COLOR[b.card.def.rarity]], bright: [2, 4.5], gravity: [0, 0, -8], drag: 2,
+        });
+        if (victim) void hitReact(tl, victim.card, b.card.position, 0.8 + heavy * 0.15).then(() => (victim.busy = false));
+        else stage.aberrationPulse = Math.max(stage.aberrationPulse, 0.5);
+      },
+    });
+  }
+
+  /** Runs whichever action the panel has selected on a clicked card. */
+  async function act(b: BoardCard) {
+    if (clickMode === 'destroy') return destroyOnBoard(b);
+    if (b.busy) return;
+    b.busy = true;
+    rest(b);
+    if (clickMode === 'attack') await attackWith(b);
+    else if (clickMode === 'tap') {
+      b.tapped = !b.tapped;
+      await tap(tl, b.card, b.tapped, scaleOf(b));
+    }
+    else if (clickMode === 'buff') await buff(tl, fx, b.card, b.side === 'player' ? 0x9dffb0 : 0xff9d8a);
+    else if (clickMode === 'flip') await flipOver(tl, b.card);
+    else await refuse(tl, b.card);
+    b.busy = false;
+  }
+
   // ---- OPPONENT ----
   async function enemyDraw(delay = 0) {
     if (delay) await tl.wait(delay);
@@ -538,13 +605,13 @@ export const boardScene: SceneFactory = ({ stage, ui }) => {
     if (!onCanvas(e)) return;
     if (hand.pointerDown()) return;
     const b = boardUnderPointer();
-    if (b) void destroyOnBoard(b);
+    if (b) void act(b);
   });
   listeners.on('pointerup', () => hand.pointerUp());
 
   const boardUnderPointer = () => {
     const ray = stage.ray();
-    for (const b of onBoard) if (b.card.hitTest(ray) !== null && tl) return b;
+    for (const b of onBoard) if (b.card.hitTest(ray) !== null && tl && !tlBusy(b.card)) return b;
     return null;
   };
 
@@ -569,6 +636,25 @@ export const boardScene: SceneFactory = ({ stage, ui }) => {
       el('div', { class: 'btn-grid' }, button('Auto-play', () => autoPlay())),
     ),
     section(
+      'Cards in play',
+      chips<ClickMode>(
+        [
+          { id: 'attack', label: 'Attack' },
+          { id: 'tap', label: 'Tap' },
+          { id: 'buff', label: 'Buff' },
+          { id: 'flip', label: 'Flip' },
+          { id: 'refuse', label: 'Refuse' },
+          { id: 'destroy', label: 'Destroy' },
+        ],
+        clickMode,
+        (id) => (clickMode = id),
+      ).root,
+      el('div', { class: 'hint', text: 'Click a card on the table to do this. Attacks pick a random opposing unit, or go for the player if there is none.' }),
+      el('div', { class: 'btn-grid' },
+        button('Shuffle deck', () => void shufflePile(tl, deck, scene, CARDS[0])),
+      ),
+    ),
+    section(
       'Leaving play',
       chips<ExitStyle | 'grave'>(
         [
@@ -580,7 +666,7 @@ export const boardScene: SceneFactory = ({ stage, ui }) => {
         exitStyle,
         (id) => (exitStyle = id),
       ).root,
-      el('div', { class: 'hint', text: 'Click a card on the table to destroy it this way.' }),
+      el('div', { class: 'hint', text: 'How a destroyed card leaves the table.' }),
       el('div', { class: 'btn-grid' },
         button('Discard', () => void discardFromHand()),
         button('Clear board', clearBoard),
@@ -624,6 +710,17 @@ export const boardScene: SceneFactory = ({ stage, ui }) => {
       if (!auto) break;
       await enemyPlay();
       await tl.wait(0.7);
+      // Combat: one unit from each side swings, if there is anyone to swing.
+      for (const side of ['player', 'enemy'] as const) {
+        const mine = onBoard.filter((o) => o.side === side && !o.busy && !tlBusy(o.card));
+        if (!auto || !mine.length || Math.random() < 0.3) continue;
+        const who = anyOf(mine);
+        who.busy = true;
+        rest(who);
+        await attackWith(who);
+        who.busy = false;
+        await tl.wait(0.35);
+      }
       const roll = Math.random();
       if (onBoard.length >= 6 || roll < 0.35) {
         const pick = anyOf(onBoard);

@@ -26,9 +26,16 @@ const ART_FOR: Record<string, string> = {
   stardust: 'veil_hexer',
   void: 'veil_sov_nightwarden',
   emberforged: 'ember_sov_pyrarch',
+  liquid: 'veil_soul_siphoner',
+  shardframe: 'ember_flame_reaver',
+  plumage: 'veil_mistwalker',
+  mosaic: 'cairn_stone_acolyte',
+  shattered: 'veil_shade_acolyte',
+  rays: 'ember_torchbearer',
+  starburst: 'veil_veiled_seer',
 };
 
-const COLS = 5;
+const COLS = 8;
 const ROWS = 3;
 const GAP_X = 0.5;
 const GAP_Y = 0.85;
